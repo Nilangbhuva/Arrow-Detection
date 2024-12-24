@@ -1,0 +1,6 @@
+train: C:\Users\Nilang\Desktop\arrow-Yolo\Datasets\train\images
+val: C:\Users\Nilang\Desktop\arrow-Yolo\Datasets\valid\images
+
+nc: 2
+names: ['a', 'arrow']
+
