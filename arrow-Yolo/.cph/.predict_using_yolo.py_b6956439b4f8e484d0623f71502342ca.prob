@@ -1,0 +1,1 @@
+{"name":"Local: predict_using_yolo","url":"c:\\Users\\Nilang\\Desktop\\Arrow-Detection\\arrow-Yolo\\predict_using_yolo.py","tests":[{"id":1737288596991,"input":"","output":""}],"interactive":false,"memoryLimit":1024,"timeLimit":3000,"srcPath":"c:\\Users\\Nilang\\Desktop\\Arrow-Detection\\arrow-Yolo\\predict_using_yolo.py","group":"local","local":true}

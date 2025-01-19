@@ -12,12 +12,18 @@ while True:
     if not ret:
         break
     
+    # Convert the frame to grayscale
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Since YOLO might expect a 3-channel image, we need to convert the grayscale image back to BGR
+    gray_frame_bgr = cv2.cvtColor(gray_frame, cv2.COLOR_GRAY2BGR)
+    
     # Get frame dimensions
-    frame_height, frame_width = frame.shape[:2]
+    frame_height, frame_width = gray_frame.shape[:2]
     frame_center_x = frame_width // 2
 
     # Predict using the model
-    results = model.predict(source=frame, conf=0.4, show=False)
+    results = model.predict(source=gray_frame_bgr, conf=0.4, show=False)
 
     for result in results:
         # Iterate over each detection
