@@ -53,11 +53,24 @@ class ImageStitchingNode(Node):
         self.image_count = 0
         self.get_logger().info('Started capturing images.')
 
+        # Initialize the camera
+        self.cam = cv2.VideoCapture(0)
+        if not self.cam.isOpened():
+            self.get_logger().error('Error: Could not access the camera.')
+            self.capture_images = False
+
     def image_callback(self, msg):
         if not self.capture_images:
             return
 
         try:
+            # Read a frame from the camera
+            ret, frame = self.cam.read()
+            if not ret:
+                self.get_logger().error('Failed to capture image from camera.')
+                self.capture_images = False
+                return
+
             # Convert ROS Image message to OpenCV image
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
             
