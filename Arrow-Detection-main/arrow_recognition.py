@@ -123,8 +123,8 @@ def init_video_capture():
 # Main function to run the arrow detection
 def main():
     log_initialization()
-    right_arrow = cv2.imread("Right_Arrow.png", cv2.IMREAD_GRAYSCALE)
-    left_arrow = cv2.imread("Left_arrow.png", cv2.IMREAD_GRAYSCALE)
+    right_arrow = cv2.imread("C:/Users/Nilang/Desktop/Arrow-Detection/Arrow-Detection-main/Right_Arrow.png", cv2.IMREAD_GRAYSCALE)
+    left_arrow = cv2.imread("C:/Users/Nilang/Desktop/Arrow-Detection/Arrow-Detection-main/Left_arrow.png", cv2.IMREAD_GRAYSCALE)
     
     if right_arrow is None or left_arrow is None:
         print("Error loading template images")

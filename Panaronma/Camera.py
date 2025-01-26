@@ -6,7 +6,7 @@ import numpy as np
 # Create a directory to save images
 os.makedirs("images", exist_ok=True)
 
-def capture_images(webcam_index=1, num_images=5, delay=2):
+def capture_images(webcam_index=0, num_images=5, delay=2):
     """
     Captures overlapping images for panorama stitching.
     """
@@ -99,7 +99,7 @@ def stitch_images(image_paths, gps_coords):
 
 # Main process
 if __name__ == "__main__":
-    num_images = 8  # Adjust as needed
+    num_images = 5  # Adjust as needed
     delay_between_images = 2  # Adjust for rotation time
     gps_coords = "21.1671 N, 72.7852 E"  # Temporary variable for GPS coordinates
 
