@@ -1,92 +1,185 @@
+cd ~/iot-smart-home
+
+cat > arrow_detection.py <<'PY'
 import cv2
+import time
 import numpy as np
-from tensorflow.keras.models import load_model
+from ultralytics import YOLO
 
-# Load the pre-trained Keras model
-model = load_model("custom_arrow_model_final.keras")
+# Load YOLO model
+model = YOLO("v8n.pt")
 
-def detect_arrow_shape(frame):
-    """
-    Detect the arrow-like shape in the given frame.
-    Assumes the arrow is black on a white background.
-    """
-    # Convert to grayscale
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+# Open USB webcam
+cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
 
-    # Apply binary thresholding to isolate black shapes on white
-    _, binary = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
+cap.set(cv2.CAP_PROP_FOURCC,
+        cv2.VideoWriter_fourcc(*'MJPG'))
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    # Find contours in the binary image
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+if not cap.isOpened():
+    print("Cannot open webcam")
+    exit()
 
-    for contour in contours:
-        # Calculate the area and perimeter
-        area = cv2.contourArea(contour)
-        perimeter = cv2.arcLength(contour, True)
+print("Arrow Detection Started!")
+print("Press Q to quit")
 
-        # Skip small contours
-        if area < 500:
-            continue
+# Black pixel threshold
+BLACK_THRESHOLD = 80
 
-        # Approximate the contour shape
-        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+# Minimum difference required to classify direction
+DIRECTION_THRESHOLD = 1.15
 
-        # Check for arrow-like shape (7+ vertices)
-        if len(approx) >= 7:
-            return contour, binary  # Return the arrow contour and binary image
-
-    return None, binary  # Return None and the binary image if no arrow is found
-
-# Capture video feed from the default camera
-cap = cv2.VideoCapture(0)
+prev_time = time.time()
 
 while True:
+
     ret, frame = cap.read()
+
     if not ret:
+        print("Frame capture failed")
         break
 
-    # Detect arrow in the frame
-    arrow_contour, binary_frame = detect_arrow_shape(frame)
+    # YOLO inference
+    results = model.predict(
+        frame,
+        imgsz=416,
+        conf=0.35,
+        device="cpu",
+        verbose=False
+    )
 
-    if arrow_contour is not None:
-        # Highlight the detected arrow contour
-        cv2.drawContours(frame, [arrow_contour], -1, (0, 255, 0), 2)
+    output = frame.copy()
 
-        # Extract the bounding box of the arrow
-        x, y, w, h = cv2.boundingRect(arrow_contour)
-        cropped_arrow = frame[y:y+h, x:x+w]
+    for result in results:
 
-        # Resize and preprocess the cropped arrow for model input
-        img = cv2.resize(cropped_arrow, (64, 64))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # Convert to RGB if needed
-        img = img / 255.0  # Normalize pixel values
-        img = np.expand_dims(img, axis=0)  # Add batch dimension
+        boxes = result.boxes
 
-        # Use the model to predict the arrow direction
-        predictions = model.predict(img)
-        class_idx = np.argmax(predictions)
-        confidence = predictions[0][class_idx]
+        if boxes is None:
+            continue
 
-        if confidence > 0.75:
-            arrow_direction = "Left Arrow" if class_idx == 0 else "Right Arrow"
-            message = f"{arrow_direction} Detected with {confidence:.2f}"
-            cv2.imwrite("detected_arrow.jpg", frame)
-        else:
-            message = "Arrow-like shape detected, but not confirmed"
-    else:
-        message = "No Arrow Detected"
+        for box in boxes:
 
-    # Display the message on the frame
-    cv2.putText(frame, message, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = map(
+                int, box.xyxy[0].tolist()
+            )
 
-    # Display the live feeds
-    cv2.imshow("Normal Feed", frame)       # Normal feed with arrow contours and message
-    cv2.imshow("Grayscale Feed", binary_frame)  # Binary feed highlighting black shapes
+            x1 = max(0, x1)
+            y1 = max(0, y1)
+            x2 = min(frame.shape[1], x2)
+            y2 = min(frame.shape[0], y2)
 
-    # Exit the loop on 'q' key press
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            # Crop detected arrow
+            roi = frame[y1:y2, x1:x2]
+
+            # Convert to grayscale
+            gray = cv2.cvtColor(
+                roi, cv2.COLOR_BGR2GRAY
+            )
+
+            # Detect black pixels
+            _, binary = cv2.threshold(
+                gray,
+                BLACK_THRESHOLD,
+                255,
+                cv2.THRESH_BINARY_INV
+            )
+
+            # Divide bounding box into two halves
+            mid = binary.shape[1] // 2
+
+            left_half = binary[:, :mid]
+            right_half = binary[:, mid:]
+
+            # Count black pixels
+            left_black = cv2.countNonZero(left_half)
+            right_black = cv2.countNonZero(right_half)
+
+            # Determine direction
+            if left_black > right_black * DIRECTION_THRESHOLD:
+                direction = "LEFT"
+                color = (0, 255, 0)
+
+            elif right_black > left_black * DIRECTION_THRESHOLD:
+                direction = "RIGHT"
+                color = (255, 0, 0)
+
+            else:
+                direction = "UNCERTAIN"
+                color = (0, 255, 255)
+
+            # Confidence from YOLO
+            confidence = float(box.conf[0])
+
+            # Draw bounding box
+            cv2.rectangle(
+                output,
+                (x1, y1),
+                (x2, y2),
+                color,
+                2
+            )
+
+            # Draw dividing line
+            cv2.line(
+                output,
+                (x1 + mid, y1),
+                (x1 + mid, y2),
+                (0, 255, 255),
+                2
+            )
+
+            # Display direction and confidence
+            label = f"{direction} | {confidence:.2f}"
+
+            cv2.putText(
+                output,
+                label,
+                (x1, max(y1 - 10, 25)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                color,
+                2
+            )
+
+            # Display black pixel counts
+            cv2.putText(
+                output,
+                f"L:{left_black} R:{right_black}",
+                (x1, min(y2 + 22, output.shape[0] - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                2
+            )
+
+    # FPS calculation
+    current_time = time.time()
+    fps = 1 / max(current_time - prev_time, 0.001)
+    prev_time = current_time
+
+    cv2.putText(
+        output,
+        f"FPS: {fps:.1f}",
+        (20, 35),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 0),
+        2
+    )
+
+    cv2.imshow("YOLO Arrow Direction Detection", output)
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Release the video capture and close all windows
 cap.release()
 cv2.destroyAllWindows()
+
+print("Detection stopped")
+PY
