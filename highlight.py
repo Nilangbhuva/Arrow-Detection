@@ -1,185 +1,144 @@
-cd ~/iot-smart-home
-
 cat > arrow_detection.py <<'PY'
 import cv2
 import time
-import numpy as np
-from ultralytics import YOLO
+from gpiozero import Servo
 
-# Load YOLO model
-model = YOLO("v8n.pt")
+# Servo connected to BCM GPIO18 (physical pin 12)
+servo = Servo(
+    18,
+    min_pulse_width=0.0005,
+    max_pulse_width=0.0025
+)
 
-# Open USB webcam
-cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+# Servo positions
+LEFT_POSITION = -0.5
+RIGHT_POSITION = 0.5
 
-cap.set(cv2.CAP_PROP_FOURCC,
-        cv2.VideoWriter_fourcc(*'MJPG'))
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+# Start at centre
+servo.mid()
+time.sleep(1)
 
-if not cap.isOpened():
-    print("Cannot open webcam")
+# USB camera connected to Raspberry Pi
+camera = cv2.VideoCapture(0)
+
+if not camera.isOpened():
+    print("ERROR: Camera not detected!")
+    servo.detach()
     exit()
 
-print("Arrow Detection Started!")
-print("Press Q to quit")
+last_direction = None
+last_move_time = 0
+COOLDOWN = 1.0
 
-# Black pixel threshold
-BLACK_THRESHOLD = 80
+def detect_arrow(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-# Minimum difference required to classify direction
-DIRECTION_THRESHOLD = 1.15
-
-prev_time = time.time()
-
-while True:
-
-    ret, frame = cap.read()
-
-    if not ret:
-        print("Frame capture failed")
-        break
-
-    # YOLO inference
-    results = model.predict(
-        frame,
-        imgsz=416,
-        conf=0.35,
-        device="cpu",
-        verbose=False
+    # Threshold dark arrow printed on white paper
+    _, thresh = cv2.threshold(
+        gray, 100, 255, cv2.THRESH_BINARY_INV
     )
 
-    output = frame.copy()
+    contours, _ = cv2.findContours(
+        thresh,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
 
-    for result in results:
+    for contour in contours:
+        area = cv2.contourArea(contour)
 
-        boxes = result.boxes
-
-        if boxes is None:
+        if area < 1500:
             continue
 
-        for box in boxes:
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(
+            contour, 0.025 * perimeter, True
+        )
 
-            # Get bounding box coordinates
-            x1, y1, x2, y2 = map(
-                int, box.xyxy[0].tolist()
-            )
+        x, y, w, h = cv2.boundingRect(contour)
 
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-            x2 = min(frame.shape[1], x2)
-            y2 = min(frame.shape[0], y2)
+        if w < 50 or h < 30:
+            continue
 
-            if x2 <= x1 or y2 <= y1:
-                continue
+        # Ignore shapes that are too narrow or too tall
+        if w / h < 1.2:
+            continue
 
-            # Crop detected arrow
-            roi = frame[y1:y2, x1:x2]
+        points = approx.reshape(-1, 2)
+        center_y = y + h / 2
 
-            # Convert to grayscale
-            gray = cv2.cvtColor(
-                roi, cv2.COLOR_BGR2GRAY
-            )
+        # Find the leftmost and rightmost polygon vertices
+        left_point = points[points[:, 0].argmin()]
+        right_point = points[points[:, 0].argmax()]
 
-            # Detect black pixels
-            _, binary = cv2.threshold(
-                gray,
-                BLACK_THRESHOLD,
-                255,
-                cv2.THRESH_BINARY_INV
-            )
+        left_center_distance = abs(left_point[1] - center_y)
+        right_center_distance = abs(right_point[1] - center_y)
 
-            # Divide bounding box into two halves
-            mid = binary.shape[1] // 2
+        # The arrow tip is usually near the vertical centre
+        if left_center_distance < h * 0.20:
+            return "LEFT", (x, y, w, h)
 
-            left_half = binary[:, :mid]
-            right_half = binary[:, mid:]
+        if right_center_distance < h * 0.20:
+            return "RIGHT", (x, y, w, h)
 
-            # Count black pixels
-            left_black = cv2.countNonZero(left_half)
-            right_black = cv2.countNonZero(right_half)
+    return None, None
 
-            # Determine direction
-            if left_black > right_black * DIRECTION_THRESHOLD:
-                direction = "LEFT"
-                color = (0, 255, 0)
 
-            elif right_black > left_black * DIRECTION_THRESHOLD:
-                direction = "RIGHT"
-                color = (255, 0, 0)
+print("Arrow detection started. Press Q to quit.")
 
-            else:
-                direction = "UNCERTAIN"
-                color = (0, 255, 255)
+try:
+    while True:
+        ret, frame = camera.read()
 
-            # Confidence from YOLO
-            confidence = float(box.conf[0])
+        if not ret:
+            print("Camera frame not received")
+            break
 
-            # Draw bounding box
+        direction, box = detect_arrow(frame)
+
+        if direction:
+            x, y, w, h = box
+
             cv2.rectangle(
-                output,
-                (x1, y1),
-                (x2, y2),
-                color,
-                2
+                frame, (x, y), (x+w, y+h), (0, 255, 0), 2
             )
-
-            # Draw dividing line
-            cv2.line(
-                output,
-                (x1 + mid, y1),
-                (x1 + mid, y2),
-                (0, 255, 255),
-                2
-            )
-
-            # Display direction and confidence
-            label = f"{direction} | {confidence:.2f}"
 
             cv2.putText(
-                output,
-                label,
-                (x1, max(y1 - 10, 25)),
+                frame,
+                direction + " ARROW",
+                (x, y - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                color,
+                0.8,
+                (0, 255, 0),
                 2
             )
 
-            # Display black pixel counts
-            cv2.putText(
-                output,
-                f"L:{left_black} R:{right_black}",
-                (x1, min(y2 + 22, output.shape[0] - 5)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 255, 255),
-                2
-            )
+            current_time = time.time()
 
-    # FPS calculation
-    current_time = time.time()
-    fps = 1 / max(current_time - prev_time, 0.001)
-    prev_time = current_time
+            if (direction != last_direction and
+                    current_time - last_move_time > COOLDOWN):
 
-    cv2.putText(
-        output,
-        f"FPS: {fps:.1f}",
-        (20, 35),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 255, 0),
-        2
-    )
+                if direction == "LEFT":
+                    print("LEFT arrow detected - Servo LEFT")
+                    servo.value = LEFT_POSITION
 
-    cv2.imshow("YOLO Arrow Direction Detection", output)
+                elif direction == "RIGHT":
+                    print("RIGHT arrow detected - Servo RIGHT")
+                    servo.value = RIGHT_POSITION
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+                last_direction = direction
+                last_move_time = current_time
 
-cap.release()
-cv2.destroyAllWindows()
+        cv2.imshow("Raspberry Pi Arrow Detection", frame)
 
-print("Detection stopped")
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+finally:
+    camera.release()
+    cv2.destroyAllWindows()
+    servo.mid()
+    time.sleep(1)
+    servo.detach()
+    print("Program stopped safely.")
 PY
