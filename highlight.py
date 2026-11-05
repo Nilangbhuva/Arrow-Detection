@@ -1,30 +1,34 @@
+cd ~/iot-smart-home
+
 cat > arrow_detection.py <<'PY'
 import cv2
 import time
 from gpiozero import Servo
 
-# Servo connected to BCM GPIO18 (physical pin 12)
+# Servo setup: GPIO18 (physical pin 12)
 servo = Servo(
     18,
     min_pulse_width=0.0005,
     max_pulse_width=0.0025
 )
 
-# Servo positions
 LEFT_POSITION = -0.5
 RIGHT_POSITION = 0.5
 
-# Start at centre
 servo.mid()
 time.sleep(1)
 
-# USB camera connected to Raspberry Pi
-camera = cv2.VideoCapture(0)
+# USB webcam - use the same initialization as camera_test.py
+cap = cv2.VideoCapture(0)
 
-if not camera.isOpened():
-    print("ERROR: Camera not detected!")
+if not cap.isOpened():
+    print("Camera not detected!")
     servo.detach()
     exit()
+
+# Request a standard resolution
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 last_direction = None
 last_move_time = 0
@@ -33,15 +37,13 @@ COOLDOWN = 1.0
 def detect_arrow(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Threshold dark arrow printed on white paper
+    # Dark arrow on light background
     _, thresh = cv2.threshold(
         gray, 100, 255, cv2.THRESH_BINARY_INV
     )
 
     contours, _ = cv2.findContours(
-        thresh,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
+        thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
     for contour in contours:
@@ -50,49 +52,42 @@ def detect_arrow(frame):
         if area < 1500:
             continue
 
+        x, y, w, h = cv2.boundingRect(contour)
+
+        if w < 50 or h < 30 or w / h < 1.2:
+            continue
+
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(
             contour, 0.025 * perimeter, True
         )
 
-        x, y, w, h = cv2.boundingRect(contour)
-
-        if w < 50 or h < 30:
-            continue
-
-        # Ignore shapes that are too narrow or too tall
-        if w / h < 1.2:
-            continue
-
         points = approx.reshape(-1, 2)
+
         center_y = y + h / 2
 
-        # Find the leftmost and rightmost polygon vertices
         left_point = points[points[:, 0].argmin()]
         right_point = points[points[:, 0].argmax()]
 
-        left_center_distance = abs(left_point[1] - center_y)
-        right_center_distance = abs(right_point[1] - center_y)
-
-        # The arrow tip is usually near the vertical centre
-        if left_center_distance < h * 0.20:
+        if abs(left_point[1] - center_y) < h * 0.20:
             return "LEFT", (x, y, w, h)
 
-        if right_center_distance < h * 0.20:
+        if abs(right_point[1] - center_y) < h * 0.20:
             return "RIGHT", (x, y, w, h)
 
     return None, None
 
 
-print("Arrow detection started. Press Q to quit.")
+print("Arrow detection running. Press Q to quit.")
 
 try:
     while True:
-        ret, frame = camera.read()
+        ret, frame = cap.read()
 
-        if not ret:
-            print("Camera frame not received")
-            break
+        if not ret or frame is None:
+            print("Camera frame failed")
+            time.sleep(0.1)
+            continue
 
         direction, box = detect_arrow(frame)
 
@@ -104,41 +99,40 @@ try:
             )
 
             cv2.putText(
-                frame,
-                direction + " ARROW",
-                (x, y - 10),
+                frame, direction + " ARROW",
+                (x, y-10),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
+                0.8, (0, 255, 0), 2
             )
 
             current_time = time.time()
 
             if (direction != last_direction and
-                    current_time - last_move_time > COOLDOWN):
+                current_time - last_move_time > COOLDOWN):
 
                 if direction == "LEFT":
-                    print("LEFT arrow detected - Servo LEFT")
+                    print("LEFT detected - Servo moving LEFT")
                     servo.value = LEFT_POSITION
 
-                elif direction == "RIGHT":
-                    print("RIGHT arrow detected - Servo RIGHT")
+                else:
+                    print("RIGHT detected - Servo moving RIGHT")
                     servo.value = RIGHT_POSITION
 
                 last_direction = direction
                 last_move_time = current_time
 
-        cv2.imshow("Raspberry Pi Arrow Detection", frame)
+        cv2.imshow("Arrow Detection and Servo Control", frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
 finally:
-    camera.release()
+    cap.release()
     cv2.destroyAllWindows()
     servo.mid()
     time.sleep(1)
     servo.detach()
-    print("Program stopped safely.")
+    print("Program stopped")
+
+
 PY
